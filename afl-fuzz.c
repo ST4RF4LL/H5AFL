@@ -100,7 +100,8 @@ EXP_ST u8 *in_dir,                    /* Input directory with test cases  */
           *in_bitmap,                 /* Input bitmap                     */
           *doc_path,                  /* Path to documentation dir        */
           *target_path,               /* Path to target binary            */
-          *orig_cmdline;              /* Original command line            */
+          *orig_cmdline,              /* Original command line            */
+          *H5_dir;                //WH4lter,Path to H5maps
 
 EXP_ST u32 exec_tmout = EXEC_TIMEOUT; /* Configurable exec timeout (ms)   */
 static u32 hang_tmout = EXEC_TIMEOUT; /* Timeout used for hang det (ms)   */
@@ -152,7 +153,8 @@ EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
-           virgin_crash[MAP_SIZE];    /* Bits we haven't seen in crashes  */
+           virgin_crash[MAP_SIZE],    /* Bits we haven't seen in crashes  */
+           H5_map[MAP_SIZE];          //Wh4lter. mutatable bits in testcase 
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
@@ -262,6 +264,7 @@ struct queue_entry {
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
 
+
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
 
@@ -335,6 +338,8 @@ enum {
   /* 04 */ FAULT_NOINST,
   /* 05 */ FAULT_NOBITS
 };
+
+// Decalred by Wh4lter
 
 
 /* Get unix time in milliseconds */
@@ -799,6 +804,7 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 }
 
 
+
 /* Append new test case to the queue. */
 
 static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
@@ -809,7 +815,7 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
-
+  
   if (q->depth > max_depth) max_depth = q->depth;
 
   if (queue_top) {
@@ -870,7 +876,7 @@ EXP_ST void write_bitmap(void) {
 
   fname = alloc_printf("%s/fuzz_bitmap", out_dir);
   fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-
+   
   if (fd < 0) PFATAL("Unable to open '%s'", fname);
 
   ck_write(fd, virgin_bits, MAP_SIZE, fname);
@@ -879,6 +885,8 @@ EXP_ST void write_bitmap(void) {
   ck_free(fname);
 
 }
+
+
 
 
 /* Read bitmap from file. This is for the -B option again. */
@@ -1488,7 +1496,7 @@ static void read_testcases(void) {
 
     /* This also takes care of . and .. */
 
-    if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn, "/README.testcases")) {
+    if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn, "/README.txt")) {
 
       ck_free(fn);
       ck_free(dfn);
@@ -5180,8 +5188,9 @@ static u8 fuzz_one(char** argv) {
   prev_cksum = queue_cur->exec_cksum;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
     stage_cur_byte = stage_cur >> 3;
+    
+    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
 
     FLIP_BIT(out_buf, stage_cur);
 
@@ -5272,6 +5281,7 @@ static u8 fuzz_one(char** argv) {
   orig_hit_cnt = new_hit_cnt;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
 
     stage_cur_byte = stage_cur >> 3;
 
@@ -5301,6 +5311,7 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     stage_cur_byte = stage_cur >> 3;
+    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -5356,6 +5367,7 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     stage_cur_byte = stage_cur;
+    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
 
     out_buf[stage_cur] ^= 0xFF;
 
@@ -5606,7 +5618,7 @@ skip_bitflip:
  
       } else stage_max--;
 
-      if ((orig & 0xff) < j && !could_be_bitflip(r2)) {
+      if ((orig & 0xff) > j && !could_be_bitflip(r2)) {
 
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = orig - j;
@@ -5631,7 +5643,7 @@ skip_bitflip:
 
       } else stage_max--;
 
-      if ((orig >> 8) < j && !could_be_bitflip(r4)) {
+      if ((orig >> 8) > j && !could_be_bitflip(r4)) {
 
         stage_cur_val = -j;
         *(u16*)(out_buf + i) = SWAP16(SWAP16(orig) - j);
@@ -5699,7 +5711,7 @@ skip_bitflip:
 
       } else stage_max--;
 
-      if ((orig & 0xffff) < j && !could_be_bitflip(r2)) {
+      if ((orig & 0xffff) > j && !could_be_bitflip(r2)) {
 
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = orig - j;
@@ -5723,7 +5735,7 @@ skip_bitflip:
 
       } else stage_max--;
 
-      if ((SWAP32(orig) & 0xffff) < j && !could_be_bitflip(r4)) {
+      if ((SWAP32(orig) & 0xffff) > j && !could_be_bitflip(r4)) {
 
         stage_cur_val = -j;
         *(u32*)(out_buf + i) = SWAP32(SWAP32(orig) - j);
@@ -7770,6 +7782,23 @@ static void save_cmdline(u32 argc, char** argv) {
 
 }
 
+//Wh4lter
+void read_H5map(u8* fname,u32 file_size)
+{
+  u8* file_name;
+  u8* map_name;
+  file_name = strrchr(fname,':')+1;
+  map_name=alloc_printf("%s/%s",H5_dir,file_name);
+
+  s32 fd = open(map_name,O_RDONLY);
+  if (fd < 0) PFATAL("Unable to open '%s'", map_name);
+
+  ck_read(fd, H5_map, file_size, fname);
+
+  close(fd);
+
+  return;
+}
 
 #ifndef AFL_LIB
 
@@ -7795,7 +7824,7 @@ int main(int argc, char** argv) {
   gettimeofday(&tv, &tz);
   srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
 
-  while ((opt = getopt(argc, argv, "+i:o:f:m:b:t:T:dnCB:S:M:x:QV")) > 0)
+  while ((opt = getopt(argc, argv, "+i:o:H:f:m:b:t:T:dnCB:S:M:x:QV")) > 0)//Wh4lter add -H as h5_dir
 
     switch (opt) {
 
@@ -7812,6 +7841,12 @@ int main(int argc, char** argv) {
 
         if (out_dir) FATAL("Multiple -o options not supported");
         out_dir = optarg;
+        break;
+
+      case 'H'://Wh4lter H5_dir
+
+        if(H5_dir) FATAL("Multiple -H options not supported");
+        H5_dir = optarg;
         break;
 
       case 'M': { /* master sync ID */
@@ -8093,7 +8128,6 @@ int main(int argc, char** argv) {
     u8 skipped_fuzz;
 
     cull_queue();
-
     if (!queue_cur) {
 
       queue_cycle++;
@@ -8107,6 +8141,7 @@ int main(int argc, char** argv) {
         queue_cur = queue_cur->next;
       }
 
+      read_H5map(queue_cur->fname,queue_cur->len);//Wh4lter
       show_stats();
 
       if (not_on_tty) {
