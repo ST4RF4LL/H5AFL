@@ -154,7 +154,9 @@ EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
            virgin_crash[MAP_SIZE],    /* Bits we haven't seen in crashes  */
-           H5_map[MAP_SIZE];          //Wh4lter. mutatable bits in testcase 
+           H5_map_ori[MAP_SIZE],          //Wh4lter. mutatable map of testcase 
+           H5_map_addition[MAP_SIZE], //Wh4lter, addition bits for H5_map
+           H5_map_in_use[MAP_SIZE];  //Wh4lter, 
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
@@ -232,6 +234,8 @@ static u64 total_bitmap_size,         /* Total bit count for all bitmaps  */
 
 static s32 cpu_core_count;            /* CPU core count                   */
 
+static u64 counter=0;                 //Wh4lter,the value of q->serial
+
 #ifdef HAVE_AFFINITY
 
 static s32 cpu_aff = -1;       	      /* Selected CPU core                */
@@ -263,6 +267,10 @@ struct queue_entry {
 
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
+//Wh4lter
+  u64 serial;                         //the serial of Hmap. updated after havoc stage
+  
+
 
 
   struct queue_entry *next,           /* Next element, if any             */
@@ -339,7 +347,6 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
-// Decalred by Wh4lter
 
 
 /* Get unix time in milliseconds */
@@ -815,6 +822,7 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
+  q->serial       = counter;
   
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -5088,6 +5096,19 @@ static u8 fuzz_one(char** argv) {
 
   cur_depth = queue_cur->depth;
 
+  //Wh4lter.Map the H5_map into memory
+
+  read_H5map(queue_cur->fname,queue_cur->len,queue_cur->serial);
+  memset(H5_map_addition,0,MAP_SIZE);
+  memset(H5_map_in_use,0,MAP_SIZE);
+  for(int i=0;i<MAP_SIZE;i++)
+  {
+    H5_map_in_use[i] = H5_map_addition[i] | H5_map_ori[i];
+  }
+
+
+  //Wh4lter
+
   /*******************************************
    * CALIBRATION (only if failed earlier on) *
    *******************************************/
@@ -5190,7 +5211,7 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
     stage_cur_byte = stage_cur >> 3;
     
-    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
 
     FLIP_BIT(out_buf, stage_cur);
 
@@ -5281,7 +5302,7 @@ static u8 fuzz_one(char** argv) {
   orig_hit_cnt = new_hit_cnt;
 
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
 
     stage_cur_byte = stage_cur >> 3;
 
@@ -5311,7 +5332,7 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     stage_cur_byte = stage_cur >> 3;
-    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -5367,7 +5388,7 @@ static u8 fuzz_one(char** argv) {
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
 
     stage_cur_byte = stage_cur;
-    if (!H5_map[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
 
     out_buf[stage_cur] ^= 0xFF;
 
@@ -7783,21 +7804,33 @@ static void save_cmdline(u32 argc, char** argv) {
 }
 
 //Wh4lter
-void read_H5map(u8* fname,u32 file_size)
+void read_H5map(u8* fname,u32 file_size,u64 serial)
 {
   u8* file_name;
   u8* map_name;
   file_name = strrchr(fname,':')+1;
-  map_name=alloc_printf("%s/%s",H5_dir,file_name);
+  map_name=alloc_printf("%s/%s-%llu",H5_dir,file_name,serial);
 
   s32 fd = open(map_name,O_RDONLY);
   if (fd < 0) PFATAL("Unable to open '%s'", map_name);
 
-  ck_read(fd, H5_map, file_size, fname);
+  ck_read(fd, H5_map_ori, file_size, fname);
 
   close(fd);
 
   return;
+}
+
+void write_H5map()
+{
+
+}
+
+int update_H5map()
+{
+  
+  //check old_map[update_bit]==1 if True:No need to update this Map bit
+  return 0;//o means no need to update;1 means updated
 }
 
 #ifndef AFL_LIB
@@ -8141,7 +8174,6 @@ int main(int argc, char** argv) {
         queue_cur = queue_cur->next;
       }
 
-      read_H5map(queue_cur->fname,queue_cur->len);//Wh4lter
       show_stats();
 
       if (not_on_tty) {
