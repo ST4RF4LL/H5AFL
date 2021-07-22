@@ -137,8 +137,8 @@ EXP_ST u8  skip_deterministic,        /* Skip deterministic stages?       */
            run_over10m,               /* Run time over 10 minutes?        */
            persistent_mode,           /* Running in persistent mode?      */
            deferred_mode,             /* Deferred forkserver mode?        */
-           fast_cal;                  /* Try to calibrate faster?         */
-
+           fast_cal,                  /* Try to calibrate faster?         */
+           H5Map_change_flag = 0;     //Wh4lter flag to show whether necessary to change a new map_serial
 static s32 out_fd,                    /* Persistent fd for out_file       */
            dev_urandom_fd = -1,       /* Persistent fd for /dev/urandom   */
            dev_null_fd = -1,          /* Persistent fd for /dev/null      */
@@ -154,9 +154,9 @@ EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
            virgin_crash[MAP_SIZE],    /* Bits we haven't seen in crashes  */
-           H5_map_ori[MAP_SIZE],          //Wh4lter. mutatable map of testcase 
-           H5_map_addition[MAP_SIZE], //Wh4lter, addition bits for H5_map
-           H5_map_in_use[MAP_SIZE];  //Wh4lter, 
+           H5_map_ori[MAX_FILE],          //Wh4lter. mutatable map of testcase 
+           H5_map_addition[MAX_FILE], //Wh4lter, addition bits for H5_map
+           H5_map_in_use[MAX_FILE];  //Wh4lter, 
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
@@ -235,6 +235,7 @@ static u64 total_bitmap_size,         /* Total bit count for all bitmaps  */
 static s32 cpu_core_count;            /* CPU core count                   */
 
 static u64 counter=0;                 //Wh4lter,the value of q->serial
+static u8   obj_len;                  //Wh4lter
 
 #ifdef HAVE_AFFINITY
 
@@ -814,7 +815,7 @@ static void mark_as_redundant(struct queue_entry* q, u8 state) {
 
 /* Append new test case to the queue. */
 
-static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
+static void add_to_queue(u8* fname, u32 len, u8 passed_det,u64 serial) {
 
   struct queue_entry* q = ck_alloc(sizeof(struct queue_entry));
 
@@ -822,7 +823,7 @@ static void add_to_queue(u8* fname, u32 len, u8 passed_det) {
   q->len          = len;
   q->depth        = cur_depth + 1;
   q->passed_det   = passed_det;
-  q->serial       = counter;
+  q->serial       = serial;
   
   if (q->depth > max_depth) max_depth = q->depth;
 
@@ -1524,7 +1525,7 @@ static void read_testcases(void) {
     if (!access(dfn, F_OK)) passed_det = 1;
     ck_free(dfn);
 
-    add_to_queue(fn, st.st_size, passed_det);
+    add_to_queue(fn, st.st_size, passed_det,counter++);
 
   }
 
@@ -3204,8 +3205,13 @@ static u8 save_if_interesting(char** argv, void* mem, u32 len, u8 fault) {
 
 #endif /* ^!SIMPLE_FILES */
 
-    add_to_queue(fn, len, 0);
-
+    u32 new_serial = H5Map_change_flag?counter++:queue_cur->serial;
+    add_to_queue(fn, len, 0,new_serial);//Wh4lter
+    if (H5Map_change_flag)//Wh4lter
+    {
+      write_H5map(fn,len,new_serial);
+    }
+    
     if (hnb == 2) {
       queue_top->has_new_cov = 1;
       queued_with_cov++;
@@ -5011,6 +5017,215 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 }
 
+//Wh4lter
+
+//Wh4lter
+
+
+
+void generate_H5map(u8* fname)
+{
+//invoke python script to generate new H5_map
+//maybe will be used in splicing
+}
+
+//read H5Map from directory into memory
+void read_H5map(u8* fname,u32 file_size,u64 serial)
+{
+  // u8* file_name;
+  u8* map_name;
+  // file_name = strrchr(fname,'-')+1;
+  // file_name = strstr(fname,"/queue/")+7;
+
+  map_name=alloc_printf("%s/%llu",H5_dir,serial);
+
+  s32 fd = open(map_name,O_RDONLY);
+  if (fd < 0) PFATAL("Unable to open '%s'", map_name);
+
+  ck_read(fd, H5_map_ori, file_size, fname);
+
+  close(fd);
+
+  return;
+}
+//write a new H5_map to directory
+void write_H5map(u8* fname,u32 file_size,u64 serial)
+{
+  // u8* file_name;
+  u8* map_name;
+  // file_name = strstr(fname,"/queue/")+7;
+  map_name=alloc_printf("%s/%llu",H5_dir,serial);
+  s32 fd = open(map_name,O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd < 0) PFATAL("Unable to open '%s'", map_name);
+
+  ck_write(fd, H5_map_ori, file_size, map_name);
+  close(fd);
+  ck_free(map_name);
+}
+
+//pos in byte, size in byte
+void update_H5map(u32 pos,u32 size)
+{
+  // if H5_map_ori
+  for(int i=0;i<size;i++)
+  {
+    H5_map_in_use[pos+i]=H5_map_in_use[pos+i]+0x10>0xFF?0xFF:H5_map_in_use[pos+i]+0x10;
+  }
+
+}
+
+//change the size when havoc stage case 11/12(delete) 13(clone) 16(insert)
+void change_size_H5map(u32 pos,u32 change_size,u8 add_size_flag,u32 ori_len)
+{
+  if(add_size_flag)//not zero means size added
+  {
+    // u8 TEMP[MAX_FILE]={0};
+    // memcpy(TEMP,H5_map_addition,pos);//Head
+    // memset(TEMP,0x10,change_size);//inserted part
+    // memcpy(TEMP+pos+change_size,H5_map_addition+pos,ori_len+change_size-pos);//tail
+    // memset(H5_map_addition,0,MAX_FILE);
+    // memcpy(H5_map_addition,TEMP,ori_len+change_size);
+    // memmove(H5_map_addition+pos+change_size,H5_map_addition+pos,change_size);
+    // memset(H5_map_addition+pos,0x10,change_size);
+
+    // memset(TEMP,0,MAX_FILE);
+    // memcpy(TEMP,H5_map_in_use,pos);//Head
+    // memset(TEMP,0,change_size);//inserted part
+    // memcpy(TEMP+pos+change_size,H5_map_in_use+pos,ori_len+change_size-pos);//tail
+    memmove(H5_map_in_use+pos+change_size,H5_map_in_use+pos,change_size);
+    memset(H5_map_in_use+pos,0x20,change_size);
+  }
+  else//if flag==zero means size substracted
+  {
+    // memmove(H5_map_addition+pos,H5_map_addition+pos+change_size,ori_len-pos-change_size);
+    // memset(H5_map_addition+ori_len-change_size,0,change_size);
+    memmove(H5_map_in_use+pos,H5_map_in_use+pos+change_size,ori_len-pos-change_size);
+    memset(H5_map_in_use+ori_len-change_size,0,change_size);
+    // memmove(H5_map_ori+pos,H5_map_ori+pos+change_size,ori_len-pos-change_size);
+    // memset(H5_map_ori+ori_len-change_size,0,change_size);
+    //TODO 在断点处将有效位扩散出去
+  }
+  H5Map_change_flag=1;
+  
+}
+
+u32 random_search_object(u8* out_buf,u32 testcase_len,u32 type)
+{
+  //use a global variable obj_len
+  //return the location of hit object
+  //type:BTREE_node,SNOD,HEAP,GCOL,Data_object
+  u32 found[100]={0};
+  u32 count = 0;
+  u32 length[100]={0};
+  u32 temp=0;
+  u32 temp_addition=0;
+  u8 *temp_sub=malloc(sizeof(u8)*20);
+  u32 temp_val;
+  memset(temp_sub,0,20);
+  switch (type)
+  {
+  case 0:
+    //BTree Node
+    for(count=0;temp<testcase_len;temp++)
+    {
+      if (!strcmp(out_buf+temp,"TREE"))
+      {
+        memcpy(temp_sub,out_buf+temp+6,2);        
+        // temp_addition=SWAP16(temp_val);
+        temp_addition=MIN((int)*temp_sub,4);
+        temp_val=24+8*(temp_addition*2+1);
+        if (temp+temp_val>testcase_len)
+        {
+          return -1;
+        }
+        
+        found[count]=temp;
+        length[count]=temp_val;
+        count++;
+        temp+=temp_val;
+      }
+    }
+    break;
+
+  case 1:
+    //SNOD
+    for(count=0;temp<testcase_len;temp++)
+    {
+      if (!strncmp(out_buf+temp,"SNOD",4))
+      {
+        memcpy(temp_sub,out_buf+temp+6,2);        
+        // temp_addition=SWAP16(temp_val);
+        temp_addition=MIN(4,(int)*temp_sub);
+        temp_val=8+temp_addition*40;
+        if (temp+temp_val>testcase_len)
+        {
+          return -1;
+        }
+        found[count]=temp;
+        length[count]=temp_val;
+        count++;
+        temp+=temp_val;
+      }
+    }
+    break;
+
+  case 2:
+    //HEAP
+    //HEAP is follow BTREE with offset 0x220
+    for(count=0;temp<testcase_len;temp++)
+    {
+      if (!strcmp(out_buf+temp,"HEAP"))
+      {
+        // memcpy(temp_sub,out_buf+temp+6,2);    
+        // temp_addition=SWAP16(temp_val);
+        // temp_addition=(int)*temp_sub;
+        temp_val=32;
+        if (temp+temp_val>testcase_len)
+        {
+          return -1;
+        }
+        found[count]=temp;
+        length[count]=temp_val;
+        count++;
+        temp+=temp_val;
+      }
+    }
+    break;
+
+  case 3:
+    //GCOL
+    for(count=0;temp<testcase_len;temp++)
+    {
+      if (!strcmp(out_buf+temp,"GCOL"))
+      {
+        temp_val=16;
+        if (temp+temp_val>testcase_len)
+        {
+          return -1;
+        }
+        found[count]=temp;
+        length[count]=temp_val;
+        count++;
+        temp+=temp_val;
+      }
+    }
+    break;
+
+  default:
+    //Data object
+    return -1;
+    break;
+  }
+  if(!count)return -1;
+  u32 random_select = UR(count);
+  obj_len = length[random_select];
+  return found[random_select];
+}
+
+// u32 random_search_object(u8* out_buf,u32 testcase_len,u32 type)
+// {
+
+// }
 
 /* Take the current entry from the queue, fuzz it for a while. This
    function is a tad too long... returns 0 if fuzzed successfully, 1 if
@@ -5036,7 +5251,6 @@ static u8 fuzz_one(char** argv) {
   if (queue_cur->depth > 1) return 1;
 
 #else
-
   if (pending_favored) {
 
     /* If we have any favored, non-fuzzed new arrivals in the queue,
@@ -5097,15 +5311,16 @@ static u8 fuzz_one(char** argv) {
   cur_depth = queue_cur->depth;
 
   //Wh4lter.Map the H5_map into memory
-
-  read_H5map(queue_cur->fname,queue_cur->len,queue_cur->serial);
-  memset(H5_map_addition,0,MAP_SIZE);
-  memset(H5_map_in_use,0,MAP_SIZE);
-  for(int i=0;i<MAP_SIZE;i++)
-  {
-    H5_map_in_use[i] = H5_map_addition[i] | H5_map_ori[i];
-  }
-
+  read_H5map(queue_cur->fname,len,queue_cur->serial);
+  memset(H5_map_in_use,0,MAX_FILE);
+  // for(int i=0;i<MAX_FILE;i++)
+  // {
+  //   H5_map_in_use[i] = H5_map_addition[i] | H5_map_ori[i];
+  // }
+  memcpy(H5_map_in_use,H5_map_ori,len);
+  // memset(H5_map_addition,0,MAX_FILE);//Wh4lter
+  H5Map_change_flag=0;
+  use_splicing=0;
 
   //Wh4lter
 
@@ -5208,13 +5423,17 @@ static u8 fuzz_one(char** argv) {
 
   prev_cksum = queue_cur->exec_cksum;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (stage_cur = 0; stage_cur < len<<3; stage_cur++) {
     stage_cur_byte = stage_cur >> 3;
     
-    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte])
+    {
+      stage_max--;
+      continue;
+    } //Wh4lter
 
     FLIP_BIT(out_buf, stage_cur);
-
+    //H5_map_in_use[stage_cur_byte]--;//Wh4lter
     if (common_fuzz_stuff(argv, out_buf, len)) goto abandon_entry;
 
     FLIP_BIT(out_buf, stage_cur);
@@ -5301,9 +5520,13 @@ static u8 fuzz_one(char** argv) {
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
-
+  for (stage_cur = 0; stage_cur < (len << 3) - 1; stage_cur++) {
+    if (!H5_map_in_use[stage_cur_byte])
+    {
+      stage_max--;
+      continue;
+    }//Wh4lter
+    //H5_map_in_use[stage_cur_byte]--;
     stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
@@ -5329,10 +5552,16 @@ static u8 fuzz_one(char** argv) {
 
   orig_hit_cnt = new_hit_cnt;
 
-  for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
+  for (stage_cur = 0; stage_cur < (len << 3) - 3; stage_cur++) {
 
     stage_cur_byte = stage_cur >> 3;
-    if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
+    if (!H5_map_in_use[stage_cur_byte]) 
+    {
+      stage_max--;
+      continue;
+    }
+    //Wh4lter
+    //H5_map_in_use[stage_cur_byte]--;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
@@ -5389,6 +5618,7 @@ static u8 fuzz_one(char** argv) {
 
     stage_cur_byte = stage_cur;
     if (!H5_map_in_use[stage_cur_byte]) continue;//Wh4lter
+    //H5_map_in_use[stage_cur_byte]--;
 
     out_buf[stage_cur] ^= 0xFF;
 
@@ -5467,6 +5697,7 @@ static u8 fuzz_one(char** argv) {
     }
 
     stage_cur_byte = i;
+    //H5_map_in_use[stage_cur_byte]--;
 
     *(u16*)(out_buf + i) ^= 0xFFFF;
 
@@ -5504,6 +5735,7 @@ static u8 fuzz_one(char** argv) {
     }
 
     stage_cur_byte = i;
+    //H5_map_in_use[stage_cur_byte]--;
 
     *(u32*)(out_buf + i) ^= 0xFFFFFFFF;
 
@@ -5550,6 +5782,7 @@ skip_bitflip:
     }
 
     stage_cur_byte = i;
+    // //H5_map_in_use[stage_cur_byte]--;
 
     for (j = 1; j <= ARITH_MAX; j++) {
 
@@ -5614,6 +5847,7 @@ skip_bitflip:
     }
 
     stage_cur_byte = i;
+    // //H5_map_in_use[stage_cur_byte]--;
 
     for (j = 1; j <= ARITH_MAX; j++) {
 
@@ -5709,6 +5943,7 @@ skip_bitflip:
     }
 
     stage_cur_byte = i;
+    // //H5_map_in_use[stage_cur_byte]--;
 
     for (j = 1; j <= ARITH_MAX; j++) {
 
@@ -6137,6 +6372,11 @@ skip_user_extras:
   stage_finds[STAGE_EXTRAS_AO]  += new_hit_cnt - orig_hit_cnt;
   stage_cycles[STAGE_EXTRAS_AO] += stage_max;
 
+//Wh4lter. sync eff_map to H5_map_in_use
+  memcpy(H5_map_addition,eff_map,queue_cur->len);
+
+
+
 skip_extras:
 
   /* If we made this to here without jumping to havoc_stage or abandon_entry,
@@ -6187,28 +6427,36 @@ havoc_stage:
   /* We essentially just do several thousand runs (depending on perf_score)
      where we take the input file and make random stacked tweaks. */
 
+  u32 temp_pos=0;
+  u32 pos=0;
   for (stage_cur = 0; stage_cur < stage_max; stage_cur++) {
-
+    H5Map_change_flag=0;
     u32 use_stacking = 1 << (1 + UR(HAVOC_STACK_POW2));
 
     stage_cur_val = use_stacking;
  
     for (i = 0; i < use_stacking; i++) {
 
-      switch (UR(15 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
+      // switch (UR(16 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
+      switch (UR(16)) {
+      // switch (11) {
 
         case 0:
 
           /* Flip a single bit somewhere. Spooky! */
+          temp_pos = UR(temp_len << 3);
+          FLIP_BIT(out_buf, temp_pos);
+          //update_H5map(temp_pos>>3,1);
 
-          FLIP_BIT(out_buf, UR(temp_len << 3));
           break;
 
         case 1: 
 
           /* Set byte to interesting value. */
-
-          out_buf[UR(temp_len)] = interesting_8[UR(sizeof(interesting_8))];
+          temp_pos = UR(temp_len);
+          out_buf[temp_pos] = interesting_8[UR(sizeof(interesting_8))];
+          //update_H5map(temp_pos,1);
+          
           break;
 
         case 2:
@@ -6217,18 +6465,18 @@ havoc_stage:
 
           if (temp_len < 2) break;
 
+          temp_pos = UR(temp_len - 1);
           if (UR(2)) {
-
-            *(u16*)(out_buf + UR(temp_len - 1)) =
+            *(u16*)(out_buf + temp_pos) =
               interesting_16[UR(sizeof(interesting_16) >> 1)];
 
           } else {
 
-            *(u16*)(out_buf + UR(temp_len - 1)) = SWAP16(
+            *(u16*)(out_buf + temp_pos) = SWAP16(
               interesting_16[UR(sizeof(interesting_16) >> 1)]);
 
           }
-
+          //update_H5map(temp_pos,2);
           break;
 
         case 3:
@@ -6236,33 +6484,33 @@ havoc_stage:
           /* Set dword to interesting value, randomly choosing endian. */
 
           if (temp_len < 4) break;
-
+          temp_pos = UR(temp_len - 3);
           if (UR(2)) {
   
-            *(u32*)(out_buf + UR(temp_len - 3)) =
+            *(u32*)(out_buf + temp_pos) =
               interesting_32[UR(sizeof(interesting_32) >> 2)];
 
           } else {
 
-            *(u32*)(out_buf + UR(temp_len - 3)) = SWAP32(
+            *(u32*)(out_buf + temp_pos) = SWAP32(
               interesting_32[UR(sizeof(interesting_32) >> 2)]);
 
           }
-
+          //update_H5map(temp_pos,4);
           break;
 
         case 4:
 
           /* Randomly subtract from byte. */
-
-          out_buf[UR(temp_len)] -= 1 + UR(ARITH_MAX);
+          temp_pos = UR(temp_len);
+          out_buf[temp_pos] -= 1 + UR(ARITH_MAX);
           break;
 
         case 5:
 
           /* Randomly add to byte. */
-
-          out_buf[UR(temp_len)] += 1 + UR(ARITH_MAX);
+          temp_pos = UR(temp_len);
+          out_buf[temp_pos] += 1 + UR(ARITH_MAX);
           break;
 
         case 6:
@@ -6270,23 +6518,22 @@ havoc_stage:
           /* Randomly subtract from word, random endian. */
 
           if (temp_len < 2) break;
+          pos = UR(temp_len - 1);
 
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 1);
 
             *(u16*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 
           } else {
 
-            u32 pos = UR(temp_len - 1);
             u16 num = 1 + UR(ARITH_MAX);
 
             *(u16*)(out_buf + pos) =
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
 
           }
-
+          //update_H5map(pos,2);
           break;
 
         case 7:
@@ -6294,22 +6541,22 @@ havoc_stage:
           /* Randomly add to word, random endian. */
 
           if (temp_len < 2) break;
+          pos = UR(temp_len - 1);
 
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 1);
 
             *(u16*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 
           } else {
 
-            u32 pos = UR(temp_len - 1);
             u16 num = 1 + UR(ARITH_MAX);
 
             *(u16*)(out_buf + pos) =
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 
           }
+          //update_H5map(pos,2);
 
           break;
 
@@ -6318,23 +6565,22 @@ havoc_stage:
           /* Randomly subtract from dword, random endian. */
 
           if (temp_len < 4) break;
+          pos = UR(temp_len - 3);
 
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 3);
 
             *(u32*)(out_buf + pos) -= 1 + UR(ARITH_MAX);
 
           } else {
 
-            u32 pos = UR(temp_len - 3);
             u32 num = 1 + UR(ARITH_MAX);
 
             *(u32*)(out_buf + pos) =
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
 
           }
-
+          //update_H5map(pos,4);
           break;
 
         case 9:
@@ -6342,22 +6588,22 @@ havoc_stage:
           /* Randomly add to dword, random endian. */
 
           if (temp_len < 4) break;
+          pos = UR(temp_len - 3);
 
           if (UR(2)) {
 
-            u32 pos = UR(temp_len - 3);
 
             *(u32*)(out_buf + pos) += 1 + UR(ARITH_MAX);
 
           } else {
 
-            u32 pos = UR(temp_len - 3);
             u32 num = 1 + UR(ARITH_MAX);
 
             *(u32*)(out_buf + pos) =
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 
           }
+          //update_H5map(pos,4);
 
           break;
 
@@ -6366,8 +6612,9 @@ havoc_stage:
           /* Just set a random byte to a random value. Because,
              why not. We use XOR with 1-255 to eliminate the
              possibility of a no-op. */
-
-          out_buf[UR(temp_len)] ^= 1 + UR(255);
+          temp_pos = UR(temp_len);
+          out_buf[temp_pos] ^= 1 + UR(255);
+          //update_H5map(temp_pos,1);
           break;
 
         case 11 ... 12: {
@@ -6375,72 +6622,130 @@ havoc_stage:
             /* Delete bytes. We're making this a bit more likely
                than insertion (the next option) in hopes of keeping
                files reasonably small. */
+            if(UR(4))//Wh4lter.75% chance to use smart deletion
+            {
+              u32 del_len=0;
+              if (temp_len < 2) break;
+              // u32 del_type = UR(3);
+              u32 del_type = 1;
+              
+              u32 del_from = random_search_object(out_buf,temp_len,del_type);
+              if (del_from == -1) break;
+              
+              del_len = obj_len;
 
-            u32 del_from, del_len;
+              memmove(out_buf + del_from, out_buf + del_from + del_len,
+                      temp_len - del_from - del_len);
+              change_size_H5map(del_from,del_len,0,temp_len);
+              temp_len -= del_len;
+            }
+            else
+            {
 
-            if (temp_len < 2) break;
+              u32 del_from, del_len;
 
-            /* Don't delete too much. */
+              if (temp_len < 2) break;
 
-            del_len = choose_block_len(temp_len - 1);
+              /* Don't delete too much. */
 
-            del_from = UR(temp_len - del_len + 1);
+              del_len = choose_block_len(temp_len - 1);
 
-            memmove(out_buf + del_from, out_buf + del_from + del_len,
-                    temp_len - del_from - del_len);
+              del_from = UR(temp_len - del_len + 1);
 
-            temp_len -= del_len;
+              memmove(out_buf + del_from, out_buf + del_from + del_len,
+                      temp_len - del_from - del_len);
 
+              change_size_H5map(del_from,del_len,0,temp_len);
+              temp_len -= del_len;
+              }
+            
             break;
 
           }
 
         case 13:
+          if (UR(2))//smart clone
+          {//decrease the chance, to avoid the size increase too much
+              u32 clone_from, clone_to, clone_len;
+              u8* new_buf;
+              u8 clone_type;
 
-          if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
 
-            /* Clone bytes (75%) or insert a block of constant bytes (25%). */
+              clone_type = UR(4);
+              clone_from = random_search_object(out_buf,temp_len,clone_type);
+              if (clone_from == -1)break;
+              
+              clone_len = obj_len;
+              clone_to = UR(temp_len);
 
-            u8  actually_clone = UR(4);
-            u32 clone_from, clone_to, clone_len;
-            u8* new_buf;
+              new_buf = ck_alloc_nozero(temp_len + clone_len);
 
-            if (actually_clone) {
+              /* Head */
 
-              clone_len  = choose_block_len(temp_len);
-              clone_from = UR(temp_len - clone_len + 1);
+              memcpy(new_buf, out_buf, clone_to);
 
-            } else {
+              /* Inserted part */
 
-              clone_len = choose_block_len(HAVOC_BLK_XL);
-              clone_from = 0;
-
-            }
-
-            clone_to   = UR(temp_len);
-
-            new_buf = ck_alloc_nozero(temp_len + clone_len);
-
-            /* Head */
-
-            memcpy(new_buf, out_buf, clone_to);
-
-            /* Inserted part */
-
-            if (actually_clone)
               memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
-            else
-              memset(new_buf + clone_to,
-                     UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
+              
 
-            /* Tail */
-            memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
-                   temp_len - clone_to);
+              /* Tail */
+              memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
+                    temp_len - clone_to);
 
-            ck_free(out_buf);
-            out_buf = new_buf;
-            temp_len += clone_len;
+              ck_free(out_buf);
+              out_buf = new_buf;
+              change_size_H5map(clone_to,clone_len,1,temp_len);
+              temp_len += clone_len;
+          }
+          else
+          {
 
+            if (temp_len + HAVOC_BLK_XL < MAX_FILE) {
+
+              /* Clone bytes (75%) or insert a block of constant bytes (25%). */
+
+              u8  actually_clone = UR(4);
+              u32 clone_from, clone_to, clone_len;
+              u8* new_buf;
+
+              if (actually_clone) {
+
+                clone_len  = choose_block_len(temp_len);
+                clone_from = UR(temp_len - clone_len + 1);
+
+              } else {
+
+                clone_len = choose_block_len(HAVOC_BLK_XL);
+                clone_from = 0;
+
+              }
+
+              clone_to   = UR(temp_len);
+
+              new_buf = ck_alloc_nozero(temp_len + clone_len);
+
+              /* Head */
+
+              memcpy(new_buf, out_buf, clone_to);
+
+              /* Inserted part */
+
+              if (actually_clone)
+                memcpy(new_buf + clone_to, out_buf + clone_from, clone_len);
+              else
+                memset(new_buf + clone_to,
+                      UR(2) ? UR(256) : out_buf[UR(temp_len)], clone_len);
+
+              /* Tail */
+              memcpy(new_buf + clone_to + clone_len, out_buf + clone_to,
+                    temp_len - clone_to);
+
+              ck_free(out_buf);
+              out_buf = new_buf;
+              change_size_H5map(clone_to,clone_len,1,temp_len);
+              temp_len += clone_len;
+            }
           }
 
           break;
@@ -6466,26 +6771,109 @@ havoc_stage:
 
             } else memset(out_buf + copy_to,
                           UR(2) ? UR(256) : out_buf[UR(temp_len)], copy_len);
-
+            //update_H5map(copy_to,copy_len);
             break;
 
           }
 
-        /* Values 15 and 16 can be selected only if there are any extras
+// overwrite object
+        case 15: {
+            u32 copy_from, copy_to, copy_len;
+            u32 from_len,to_len;
+            u32 from_type,to_type;
+            u8 strategy_size,strategy_type;
+            if (temp_len < 2) break;
+            strategy_type = UR(2);
+            //0. 同Type替换同Type
+            //1. 不同Type之间替换
+            if (!strategy_type)
+            {//0
+              from_type = to_type = UR(3);
+
+            }
+            else
+            {//1
+              from_type = UR(3);
+              do
+              {
+                to_type = UR(3);
+              } while (from_type == to_type);
+            }
+
+            copy_from = random_search_object(out_buf,temp_len,from_type);
+            from_len = obj_len;
+            // do
+            // {
+            copy_to = random_search_object(out_buf,temp_len,to_type);
+            if (copy_from == copy_to||copy_from ==-1 || copy_to == -1)break;
+            
+            // } while (copy_from==copy_to);
+            to_len = obj_len;
+            
+            //compare length
+            // 1. 比原size小，保留或覆盖为0或者填充随机字符
+            // 2. 相同就不管
+            // 3. 比原size大，截取或暴力覆盖
+            if (from_len == to_len)
+            {//2
+              copy_len = to_len;
+              memmove(out_buf + copy_to, out_buf + copy_from, copy_len);
+
+            }
+            else
+            {
+              if(from_len > to_len)
+              {//3
+                strategy_size = UR(2);
+                if (!strategy_size)
+                {//3-0
+                  memmove(out_buf+copy_to,out_buf+copy_from,to_len);
+                  //temp_len will not change
+                }
+                else
+                {//3-1
+                  if (copy_to+from_len<temp_len)
+                  {
+                    memmove(out_buf+copy_to,out_buf+copy_from,from_len); 
+                  }
+                }
+              }
+              else
+              {//1
+                 strategy_size=UR(2);
+                 switch (strategy_size)
+                 {
+                 case 0:
+                    memmove(out_buf+copy_to,out_buf+copy_from,from_len);  
+                    break;
+
+                 default:
+                    memmove(out_buf+copy_to,out_buf+copy_from,from_len);
+                    memset(out_buf+from_len+1,UR(255),to_len-from_len);
+                    break;
+                 }
+              }
+              
+            }
+            
+
+            
+            break;
+        }
+
+        /* Values 16 and 17 can be selected only if there are any extras
            present in the dictionaries. */
 
-        case 15: {
+        case 16: {
 
             /* Overwrite bytes with an extra. */
-
+            u32 use_extra = UR(a_extras_cnt);
+            u32 extra_len = a_extras[use_extra].len;
+            u32 insert_at;
             if (!extras_cnt || (a_extras_cnt && UR(2))) {
 
               /* No user-specified extras or odds in our favor. Let's use an
                  auto-detected one. */
-
-              u32 use_extra = UR(a_extras_cnt);
-              u32 extra_len = a_extras[use_extra].len;
-              u32 insert_at;
 
               if (extra_len > temp_len) break;
 
@@ -6496,9 +6884,6 @@ havoc_stage:
 
               /* No auto extras or odds in our favor. Use the dictionary. */
 
-              u32 use_extra = UR(extras_cnt);
-              u32 extra_len = extras[use_extra].len;
-              u32 insert_at;
 
               if (extra_len > temp_len) break;
 
@@ -6506,12 +6891,12 @@ havoc_stage:
               memcpy(out_buf + insert_at, extras[use_extra].data, extra_len);
 
             }
-
+            //update_H5map(insert_at,extra_len);
             break;
 
           }
 
-        case 16: {
+        case 17: {
 
             u32 use_extra, extra_len, insert_at = UR(temp_len + 1);
             u8* new_buf;
@@ -6557,16 +6942,22 @@ havoc_stage:
 
             ck_free(out_buf);
             out_buf   = new_buf;
+            change_size_H5map(insert_at,extra_len,1,temp_len);
             temp_len += extra_len;
-
             break;
 
           }
 
+
       }
 
     }
-
+    //Wh4lter
+    //mutate addition map
+    memset(H5_map_ori,0,MAX_FILE);
+    memcpy(H5_map_ori,H5_map_in_use,MAX_FILE);
+    
+    //common_fuzz_stuff->save_if_interesting->save the H5_map_ori
     if (common_fuzz_stuff(argv, out_buf, temp_len))
       goto abandon_entry;
 
@@ -7803,35 +8194,9 @@ static void save_cmdline(u32 argc, char** argv) {
 
 }
 
-//Wh4lter
-void read_H5map(u8* fname,u32 file_size,u64 serial)
-{
-  u8* file_name;
-  u8* map_name;
-  file_name = strrchr(fname,':')+1;
-  map_name=alloc_printf("%s/%s-%llu",H5_dir,file_name,serial);
 
-  s32 fd = open(map_name,O_RDONLY);
-  if (fd < 0) PFATAL("Unable to open '%s'", map_name);
 
-  ck_read(fd, H5_map_ori, file_size, fname);
 
-  close(fd);
-
-  return;
-}
-
-void write_H5map()
-{
-
-}
-
-int update_H5map()
-{
-  
-  //check old_map[update_bit]==1 if True:No need to update this Map bit
-  return 0;//o means no need to update;1 means updated
-}
 
 #ifndef AFL_LIB
 
@@ -8155,6 +8520,8 @@ int main(int argc, char** argv) {
     start_time += 4000;
     if (stop_soon) goto stop_fuzzing;
   }
+
+  memset(H5_map_addition,0,MAX_FILE);//Wh4lter
 
   while (1) {
 
