@@ -5069,7 +5069,12 @@ void update_H5map(u32 pos,u32 size)
   // if H5_map_ori
   for(int i=0;i<size;i++)
   {
-    H5_map_in_use[pos+i]=H5_map_in_use[pos+i]+0x10>0xFF?0xFF:H5_map_in_use[pos+i]+0x10;
+    // H5_map_in_use[pos+i]=H5_map_in_use[pos+i]+0x10>0xFF?0xFF:H5_map_in_use[pos+i]+0x10;
+    if (!H5_map_in_use[pos+i])
+    {
+      H5_map_in_use[pos+i]=0xFF;
+    }
+    
   }
 
 }
@@ -5093,7 +5098,7 @@ void change_size_H5map(u32 pos,u32 change_size,u8 add_size_flag,u32 ori_len)
     // memset(TEMP,0,change_size);//inserted part
     // memcpy(TEMP+pos+change_size,H5_map_in_use+pos,ori_len+change_size-pos);//tail
     memmove(H5_map_in_use+pos+change_size,H5_map_in_use+pos,change_size);
-    memset(H5_map_in_use+pos,0x20,change_size);
+    memset(H5_map_in_use+pos,0xFF,change_size);
   }
   else//if flag==zero means size substracted
   {
@@ -6446,7 +6451,7 @@ havoc_stage:
           /* Flip a single bit somewhere. Spooky! */
           temp_pos = UR(temp_len << 3);
           FLIP_BIT(out_buf, temp_pos);
-          //update_H5map(temp_pos>>3,1);
+          update_H5map(temp_pos>>3,1);
 
           break;
 
@@ -6455,7 +6460,7 @@ havoc_stage:
           /* Set byte to interesting value. */
           temp_pos = UR(temp_len);
           out_buf[temp_pos] = interesting_8[UR(sizeof(interesting_8))];
-          //update_H5map(temp_pos,1);
+          update_H5map(temp_pos,1);
           
           break;
 
@@ -6476,7 +6481,7 @@ havoc_stage:
               interesting_16[UR(sizeof(interesting_16) >> 1)]);
 
           }
-          //update_H5map(temp_pos,2);
+          update_H5map(temp_pos,2);
           break;
 
         case 3:
@@ -6496,7 +6501,7 @@ havoc_stage:
               interesting_32[UR(sizeof(interesting_32) >> 2)]);
 
           }
-          //update_H5map(temp_pos,4);
+          update_H5map(temp_pos,4);
           break;
 
         case 4:
@@ -6504,6 +6509,7 @@ havoc_stage:
           /* Randomly subtract from byte. */
           temp_pos = UR(temp_len);
           out_buf[temp_pos] -= 1 + UR(ARITH_MAX);
+          update_H5map(temp_pos,1);
           break;
 
         case 5:
@@ -6511,6 +6517,7 @@ havoc_stage:
           /* Randomly add to byte. */
           temp_pos = UR(temp_len);
           out_buf[temp_pos] += 1 + UR(ARITH_MAX);
+          update_H5map(temp_pos,1);
           break;
 
         case 6:
@@ -6533,7 +6540,7 @@ havoc_stage:
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) - num);
 
           }
-          //update_H5map(pos,2);
+          update_H5map(pos,2);
           break;
 
         case 7:
@@ -6556,7 +6563,7 @@ havoc_stage:
               SWAP16(SWAP16(*(u16*)(out_buf + pos)) + num);
 
           }
-          //update_H5map(pos,2);
+          update_H5map(pos,2);
 
           break;
 
@@ -6580,7 +6587,7 @@ havoc_stage:
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) - num);
 
           }
-          //update_H5map(pos,4);
+          update_H5map(pos,4);
           break;
 
         case 9:
@@ -6603,7 +6610,7 @@ havoc_stage:
               SWAP32(SWAP32(*(u32*)(out_buf + pos)) + num);
 
           }
-          //update_H5map(pos,4);
+          update_H5map(pos,4);
 
           break;
 
