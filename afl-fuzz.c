@@ -5019,18 +5019,8 @@ static u8 could_be_interest(u32 old_val, u32 new_val, u8 blen, u8 check_le) {
 
 //Wh4lter
 
-//Wh4lter
-
-
-
-void generate_H5map(u8* fname)
-{
-//invoke python script to generate new H5_map
-//maybe will be used in splicing
-}
-
 //read H5Map from directory into memory
-void read_H5map(u8* fname,u32 file_size,u64 serial)
+void read_H5map(u8* fname,u32 file_size,u64 serial,u8* h5map)
 {
   // u8* file_name;
   u8* map_name;
@@ -5042,7 +5032,7 @@ void read_H5map(u8* fname,u32 file_size,u64 serial)
   s32 fd = open(map_name,O_RDONLY);
   if (fd < 0) PFATAL("Unable to open '%s'", map_name);
 
-  ck_read(fd, H5_map_ori, file_size, fname);
+  ck_read(fd, h5map, file_size, fname);
 
   close(fd);
 
@@ -5316,7 +5306,7 @@ static u8 fuzz_one(char** argv) {
   cur_depth = queue_cur->depth;
 
   //Wh4lter.Map the H5_map into memory
-  read_H5map(queue_cur->fname,len,queue_cur->serial);
+  read_H5map(queue_cur->fname,len,queue_cur->serial,H5_map_ori);
   memset(H5_map_in_use,0,MAX_FILE);
   // for(int i=0;i<MAX_FILE;i++)
   // {
@@ -5325,7 +5315,7 @@ static u8 fuzz_one(char** argv) {
   memcpy(H5_map_in_use,H5_map_ori,len);
   // memset(H5_map_addition,0,MAX_FILE);//Wh4lter
   H5Map_change_flag=0;
-  use_splicing=0;
+  // use_splicing=0;
 
   //Wh4lter
 
@@ -6442,10 +6432,8 @@ havoc_stage:
  
     for (i = 0; i < use_stacking; i++) {
 
-      // switch (UR(16 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
-      switch (UR(16)) {
-      // switch (11) {
-
+      switch (UR(16 + ((extras_cnt + a_extras_cnt) ? 2 : 0))) {
+      // switch (UR(16)) {
         case 0:
 
           /* Flip a single bit somewhere. Spooky! */
@@ -7062,6 +7050,10 @@ retry_splicing:
 
     close(fd);
 
+    //Wh4lter read target's H5map
+    u8 H5map_temp[MAX_FILE];
+    read_H5map(target->fname,target->len,target->serial,H5map_temp);
+
     /* Find a suitable splicing location, somewhere between the first and
        the last differing byte. Bail out if the difference is just a single
        byte or so. */
@@ -7086,7 +7078,13 @@ retry_splicing:
     ck_free(out_buf);
     out_buf = ck_alloc_nozero(len);
     memcpy(out_buf, in_buf, len);
+    //wh4lter
+    memcpy(H5map_temp,H5_map_in_use,split_at);
 
+    memset(H5_map_in_use,0,MAX_FILE);
+    memcpy(H5_map_in_use,H5map_temp,len);
+    H5Map_change_flag = 1;
+    //wh4lter
     goto havoc_stage;
 
   }
