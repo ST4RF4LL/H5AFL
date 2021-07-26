@@ -7050,9 +7050,7 @@ retry_splicing:
 
     close(fd);
 
-    //Wh4lter read target's H5map
-    u8 H5map_temp[MAX_FILE];
-    read_H5map(target->fname,target->len,target->serial,H5map_temp);
+ 
 
     /* Find a suitable splicing location, somewhere between the first and
        the last differing byte. Bail out if the difference is just a single
@@ -7072,6 +7070,11 @@ retry_splicing:
     /* Do the thing. */
 
     len = target->len;
+   //Wh4lter read target's H5map
+    u8 H5map_temp[MAX_FILE];
+    // read_H5map(target->fname,target->len,target->serial,H5map_temp);
+    memset(H5map_temp,0x01,len);
+
     memcpy(new_buf, in_buf, split_at);
     in_buf = new_buf;
 
