@@ -5032,7 +5032,8 @@ void read_H5map(u8* fname,u32 file_size,u64 serial,u8* h5map)
   s32 fd = open(map_name,O_RDONLY);
   if (fd < 0) PFATAL("Unable to open '%s'", map_name);
 
-  ck_read(fd, h5map, file_size, fname);
+  // ck_read(fd, h5map, file_size, fname);
+  read(fd,H5_map_ori,file_size);
 
   close(fd);
 
@@ -5516,13 +5517,14 @@ static u8 fuzz_one(char** argv) {
   orig_hit_cnt = new_hit_cnt;
 
   for (stage_cur = 0; stage_cur < (len << 3) - 1; stage_cur++) {
+    stage_cur_byte = stage_cur >> 3;
+
     if (!H5_map_in_use[stage_cur_byte])
     {
       stage_max--;
       continue;
     }//Wh4lter
     //H5_map_in_use[stage_cur_byte]--;
-    stage_cur_byte = stage_cur >> 3;
 
     FLIP_BIT(out_buf, stage_cur);
     FLIP_BIT(out_buf, stage_cur + 1);
